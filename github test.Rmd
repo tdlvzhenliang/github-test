@@ -1,0 +1,170 @@
+---
+title: "Risk composite score"
+author: "Ted"
+date: "2023-12-17"
+output: html_document
+---
+
+Load libraries
+```{r}
+#install.packages("tidymodels")
+#remove.packages("rlang") #get rid of older version of rlang; restart RStudio
+#install.packages("rlang") #reinstall rlang to get newer version of rlang; might have to restart RStudio
+#remove.packages("cli")
+#install.packages("cli")
+#remove.packages("dplyr")
+#install.packages("dplyr")
+#remove.packages("vctrs")
+#install.packages("vctrs")
+
+library(readxl)
+library(tidyverse)
+library(tidymodels)
+#Warning: package ‘tidymodels’ was built under R version 4.1.3
+#Error: package or namespace load failed for ‘tidymodels’ in loadNamespace(i, c(lib.loc, .libPaths()), versionCheck = vI[[i]]):
+# namespace ‘rlang’ 0.4.12 is already loaded, but >= 1.0.2 is required
+#namespace ‘cli’ 3.1.0 is already loaded, but >= 3.2.0 is required
+#namespace ‘dplyr’ 1.0.7 is already loaded, but >= 1.0.8 is required
+#namespace ‘vctrs’ 0.3.8 is already loaded, but >= 0.4.1 is required
+
+```
+
+
+
+Climate data sources:
+- https://www.copernicus.eu/en
+(flood)
+- https://data-explorer.oecd.org/vis?tm=functional%20urban%20areas&pg=0&snb=35&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_FUA_CLIM%40DF_COASTAL_FLOOD&df[ag]=OECD.CFE.EDS&df[vs]=1.0&pd=2010%2C2020&dq=AT001F%2BAT002F%2BAT003F%2BAT004F%2BAT005F%2BAT006F%2BAT001C%2BAT002C%2BAT003C%2BAT004C%2BAT005C%2BAT006C.A.CF_POP_EXP..Y_100..&ly[rw]=REF_AREA%2CTERRITORIAL_LEVEL&to[TIME_PERIOD]=false&vw=ov
+- https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.006f2c9a?tab=form
+(heat) (The Universal Thermal Climate Index (utci) produced by the eu’s Earth-observation programme, Copernicus, measures heat at hourly intervals, dividing the world into 865,000 grid squares.)
+- https://www.economist.com/graphic-detail/2022/07/21/a-rising-share-of-people-are-exposed-to-dangerously-high-temperatures
+- https://data-explorer.oecd.org/vis?tm=functional%20urban%20areas&pg=0&snb=35&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_FUA_CLIM%40DF_HEAT_STRESS&df[ag]=OECD.CFE.EDS&df[vs]=1.0&pd=%2C&dq=AT001F%2BAT002F%2BAT003F%2BAT004F%2BAT005F%2BAT006F%2BAT001C%2BAT002C%2BAT003C%2BAT004C%2BAT005C%2BAT006C.A....GE32.&to[TIME_PERIOD]=false&lo=5&lom=LASTNPERIODS
+- https://climate-adapt.eea.europa.eu/en/metadata/indicators/thermal-comfort-indices-universal-thermal-climate-index-1979-2019#:~:text=The%20universal%20thermal%20climate%20index%20(UTCI)%20describes%20the%20synergistic%20heat,response%20to%20actual%20environmental%20temperature.
+- https://cds.climate.copernicus.eu/cdsapp#!/dataset/derived-utci-historical?tab=form #NC data format
+
+intersection of city polygons with raster data on climate, earhtquakes, etc
+
+Spatial Data analysis - get raster data for cities
+https://rspatial.github.io/terra/
+https://rspatial.org/
+```{r}
+
+#test with countries
+
+library(sf) #special features
+library(rnaturalearth)
+library(WDI)
+#install.packages("WDI")
+
+ne_countries(returnclass = "sf") %>% View()
+
+countries_sf <- ne_countries(returnclass = "sf")
+
+ne_countries(returnclass = "sf") %>% 
+  filter(sovereignt == "China") %>% 
+  ggplot() +
+  geom_sf()
+
+#Test with WDI data
+gdppercap <- WDI(indicator = "NY.GDP.PCAP.CD") #gdp per capita for every country for every year
+
+gdppercap_sf <- inner_join(countries_sf, gdppercap, by = c("iso_a3" = "iso3c"))
+
+gdppercap_sf %>% 
+  group_by(sovereignt) %>% 
+  filter(year == max(year)) %>% 
+  ungroup() %>% 
+  ggplot() + 
+  geom_sf(aes(fill = `NY.GDP.PCAP.CD`))
+
+#do with cities
+#google functional urban areas
+
+
+
+```
+
+
+Copernicus climate data (NC format)
+
+work with NC data: Google - read ".nc" files in R
+see https://rpubs.com/boyerag/297592
+
+```{r}
+
+library(ncdf4) # package for netcdf manipulation
+#install.packages("ncdf4")
+library(raster) # package for raster manipulation
+library(rgdal) # package for geospatial analysis
+library(ggplot2) # package for plotting
+
+
+climate_utci <- nc_open(file.choose()) #open this file: ECMWF_utci_20231101_v1.1_con.nc
+str(climate_utci)
+
+climate_utci_lon <- ncvar_get(climate_utci, "lon")
+climate_utci_lat <- ncvar_get(climate_utci, "lat", verbose = F)
+climate_utci_time <- ncvar_get(climate_utci, "time")
+
+utci_array <- ncvar_get(climate_utci, "utci")
+dim(utci_array)
+
+fillvalue <- ncatt_get(climate_utci, "utci", "_FillValue")
+fillvalue
+
+utci_array[utci_array == fillvalue$value] <- NA
+utci_array[,,1]
+utci_slice <- utci_array[,,1]
+
+utci_raster <- raster(t(utci_slice), 
+       xmn=min(climate_utci_lon), xmx=max(climate_utci_lon), 
+       ymn=min(climate_utci_lat), ymx=max(climate_utci_lat), 
+       crs=CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs+ towgs84=0,0,0"))
+
+plot(utci_raster)
+
+
+#convert to sf
+utci_raster_sf <- as(utci_raster, "SpatialPixelsDataFrame") %>% st_as_sf()
+plot(utci_raster_sf)
+
+#intersect sf countries and utci raster data - stuck here, ask OK or AI (AI worked!)
+#ERROR: Error in wk_handle.wk_wkb(wkb, s2_geography_writer(oriented = oriented, :
+#ERROR: Loop 7 is not valid: Edge 172 crosses edge 174
+st_intersection(countries_sf, utci_raster_sf)
+
+st_is_valid(countries_sf)
+match(FALSE, st_is_valid(countries_sf)) #returns 7 and more
+st_make_valid(countries_sf) #fixed
+st_is_valid(st_make_valid(countries_sf)) #fixed
+match(FALSE, st_is_valid(st_make_valid(countries_sf))) #fixed, returns NA now
+
+st_is_valid(utci_raster_sf)
+match(FALSE, st_is_valid(utci_raster_sf)) #returns NA
+
+st_intersection(st_make_valid(countries_sf), utci_raster_sf) #try again to intersect sf countries and utci raster data - takes forever to run
+st_make_valid(countries_sf) %>% plot() #data looks okay
+countries_sf %>% plot() #data looks okay
+
+st_intersection(st_make_valid(countries_sf) %>% filter(sovereignt == "Singapore"), 
+                utci_raster_sf) #try again to intersect sf countries and utci raster data - filter for China or Singapore only as a test - still takes forever to run
+
+utci_raster_sf_china <- st_join(st_make_valid(countries_sf) %>% filter(sovereignt == "China"),
+        utci_raster_sf,
+        join = st_intersects) #try a different way; this takes forever to run as well but it runs!!!
+
+utci_raster_sf_china %>% 
+  ggplot() +
+  geom_sf(aes(fill = layer)) + #why is there no variance in the layer variable?? need to add the below (still does not work):
+  scale_fill_gradient(low = "yellow", high = "red", #an alternative is scale_fill_gradientn(colors = terrain.colors(9), ; 
+                       breaks = c(220, 230, 240, 250, 260, 270, 280, 290, 300, 310)) #see https://ggplot2.tidyverse.org/reference/scale_gradient.html
+
+utci_raster_sf_china %>% 
+  ggplot() +
+  geom_density(aes(x = layer))
+
+```
+
+
+END
+
